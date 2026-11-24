@@ -160,8 +160,25 @@ async function testSuite() {
     assert.strictEqual(forceLocalForAgent('odin'), true, 'trusted-project under full power must be forced to local');
     console.log('✓ TEST 4 PASSED: remote-ssh profile is honored even under Full Power!');
 
+    // TEST 5: Strict protection against cross-agent identityFile theft
+    console.log('\nTEST 5: Verifying cross-agent identityFile theft attempt is rejected...');
+    sshTargets.agent.identityFile = '../engineer/.ssh/id_ed25519';
+    spawnedCalls.length = 0;
+    await env.ensureReady('agent');
+    const attackCall1 = spawnedCalls[spawnedCalls.length - 1];
+    assert.strictEqual(attackCall1.args.includes(engineerKey), false, 'Relative traversal to engineer key MUST be refused');
+    assert.strictEqual(attackCall1.args.indexOf('-i'), -1, '-i must not be passed when invalid key is targeted');
+
+    sshTargets.agent.identityFile = engineerKey; // absolute path to another agent key
+    spawnedCalls.length = 0;
+    await env.ensureReady('agent');
+    const attackCall2 = spawnedCalls[spawnedCalls.length - 1];
+    assert.strictEqual(attackCall2.args.includes(engineerKey), false, 'Absolute path to engineer key MUST be refused for agent');
+    assert.strictEqual(attackCall2.args.indexOf('-i'), -1, '-i must not be passed when unauthorized key is targeted');
+    console.log('✓ TEST 5 PASSED: Cross-agent identityFile theft is strictly prevented!');
+
     console.log('\n======================================================');
-    console.log('ALL 4 TESTS PASSED! Solution verified cleanly.');
+    console.log('ALL 5 TESTS PASSED! Solution verified cleanly.');
     console.log('======================================================');
   } finally {
     try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
