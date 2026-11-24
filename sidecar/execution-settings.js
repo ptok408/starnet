@@ -25,11 +25,13 @@ function normalizeTarget(value) {
     throw new Error('remote workspace must be an absolute POSIX path without spaces or parent traversal');
   }
   const port = clampInt(value.port == null || value.port === '' ? 22 : value.port, 1, 65535, 22);
+  const identityFile = typeof value.identityFile === 'string' && value.identityFile.trim() ? value.identityFile.trim() : null;
   return {
     host,
     user,
     port,
     remoteRoot: remoteRoot || '/workspace',
+    identityFile,
     configured: !!host
   };
 }
