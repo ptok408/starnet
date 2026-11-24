@@ -61,12 +61,13 @@ function makeExecutionRouter(deps) {
   function backendForProfile(profileId) { return resolveBackend(profileId).id; }
   function resolutionFor(agentId) {
     const id = String(agentId || 'agent');
+    const profile = String(profileForAgent(id) || 'station-gear');
     try {
-      if (environments.local && forceLocalForAgent(id) === true) {
-        return { id: 'local', requested: 'local', matched: true, reason: null, profileId: String(profileForAgent(id) || 'station-gear'), forcedLocal: true, availability: 'ready' };
+      if (environments.local && profile !== 'remote-ssh' && forceLocalForAgent(id) === true) {
+        return { id: 'local', requested: 'local', matched: true, reason: null, profileId: profile, forcedLocal: true, availability: 'ready' };
       }
     } catch (_) {}
-    return resolveBackend(profileForAgent(id), id);
+    return resolveBackend(profile, id);
   }
   function backendIdFor(agentId) { return resolutionFor(agentId).id; }
   function sandboxError(res) {

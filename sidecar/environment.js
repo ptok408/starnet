@@ -870,8 +870,10 @@
       const row = targetFn(aid);
       if (!row || !row.configured || !row.host) throw new Error('SSH target is not configured for ' + aid);
       return {
+        agentId: aid,
         host: String(row.host), user: String(row.user || ''), port: clamp(row.port || 22, 1, 65535),
-        remoteRoot: String(row.remoteRoot || '/workspace').replace(/\/+$/, '') || '/workspace'
+        remoteRoot: String(row.remoteRoot || '/workspace').replace(/\/+$/, '') || '/workspace',
+        identityFile: row.identityFile ? String(row.identityFile) : null
       };
     }
     function signature(row) { return [row.host, row.user, row.port, row.remoteRoot].join('\n'); }
@@ -933,8 +935,34 @@
       return getCwd(aid);
     }
     function destination(row) { return (row.user ? row.user + '@' : '') + row.host; }
+    function resolveIdentityFile(row) {
+      if (row && row.identityFile && fs.existsSync(row.identityFile)) return row.identityFile;
+      if (row && row.agentId) {
+        const idEd = P.join(ROOT, row.agentId, '.ssh', 'id_ed25519');
+        if (fs.existsSync(idEd)) return idEd;
+        const idRsa = P.join(ROOT, row.agentId, '.ssh', 'id_rsa');
+        if (fs.existsSync(idRsa)) return idRsa;
+      }
+      return null;
+    }
     function commonOptions(row) {
-      return ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=' + String(cfg.sshConnectTimeoutSeconds || 10)];
+      const aid = row && row.agentId ? safeAgentId(row.agentId) : null;
+      const opts = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=' + String(cfg.sshConnectTimeoutSeconds || 10)];
+      const idKey = resolveIdentityFile(row);
+      if (idKey) {
+        opts.push('-i', idKey, '-o', 'IdentitiesOnly=yes');
+      }
+      if (aid) {
+        const knownHosts = P.join(ROOT, aid, '.ssh', 'known_hosts');
+        if (fs.existsSync(knownHosts)) {
+          opts.push('-o', 'UserKnownHostsFile=' + knownHosts, '-o', 'StrictHostKeyChecking=yes');
+        } else {
+          opts.push('-o', 'UserKnownHostsFile=' + knownHosts, '-o', 'StrictHostKeyChecking=accept-new');
+        }
+      } else {
+        opts.push('-o', 'StrictHostKeyChecking=yes');
+      }
+      return opts;
     }
     function childEnv() { return sanitizeChildEnv(deps.env || (typeof process !== 'undefined' ? process.env : {})); }
     function runSsh(row, script, opts) {
@@ -1147,9 +1175,23 @@
         return true;
       });
     }
+    function appendAudit(entry) {
+      try {
+        const line = JSON.stringify(entry) + '\n';
+        const globalDir = P.join(ROOT, '.execution', 'ssh');
+        fs.mkdirSync(globalDir, { recursive: true });
+        fs.appendFileSync(P.join(globalDir, 'audit.jsonl'), line, 'utf8');
+        if (entry.agentId) {
+          const agentDir = P.join(ROOT, entry.agentId, '.ssh');
+          fs.mkdirSync(agentDir, { recursive: true });
+          fs.appendFileSync(P.join(agentDir, 'audit.log'), line, 'utf8');
+        }
+      } catch (_) {}
+    }
     function execute(opts) {
       opts = opts || {};
       const aid = safeAgentId(opts.agentId || 'agent');
+      const t0 = nowMs();
       return enqueue(aid, function () {
         const row = target(aid), cwd = opts.cwd || getCwd(aid);
         if (!posixInside(cwd, row.remoteRoot)) throw new Error('SSH cwd must stay inside ' + row.remoteRoot);
@@ -1163,6 +1205,18 @@
         }).then(function (result) {
           const boundary = foregroundBoundary(result);
           if (boundary) markUnavailable(aid, boundary);
+          appendAudit({
+            timestamp: new Date().toISOString(),
+            agentId: aid,
+            user: row.user,
+            host: row.host,
+            port: row.port,
+            cwd: cwd,
+            cmd: opts.ledgerCmd || opts.cmd || '',
+            exitCode: result.exitCode,
+            durationMs: Math.max(0, nowMs() - t0),
+            status: result.exitCode === 0 ? 'ok' : 'error'
+          });
           return syncWorkspaceRaw(aid, { direction: 'pull', timeoutMs: opts.timeoutMs, maxTimeoutMs: opts.maxTimeoutMs, signal: opts.signal })
             .then(function () {
               if (boundary) result.remoteBoundary = boundary + '; remote process continuation and command completion are unconfirmed';
@@ -1171,6 +1225,21 @@
               if (!boundary) throw e;
               throw new Error(boundary + '; workspace recovery failed: ' + String((e && e.message) || e));
             });
+        }).catch(function (e) {
+          appendAudit({
+            timestamp: new Date().toISOString(),
+            agentId: aid,
+            user: row.user,
+            host: row.host,
+            port: row.port,
+            cwd: cwd,
+            cmd: opts.ledgerCmd || opts.cmd || '',
+            exitCode: -1,
+            durationMs: Math.max(0, nowMs() - t0),
+            status: 'failed',
+            error: String((e && e.message) || e)
+          });
+          throw e;
         });
       });
     }
