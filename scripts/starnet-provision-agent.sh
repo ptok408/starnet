@@ -5,7 +5,7 @@
 # na serwerze Contabo z wymuszonym rejestrowaniem audytowym.
 #
 # Użycie:
-#   sudo ./starnet-provision-agent.sh <agentId> "<klucz_publiczny_ssh>"
+#   sudo ./starnet-provision-agent.sh <agentId> ["<klucz_publiczny_ssh>"]
 #
 # Przykład:
 #   sudo ./starnet-provision-agent.sh odin "ssh-ed25519 AAAA... odin-key"
@@ -87,7 +87,18 @@ touch "$AUDIT_LOG_FILE"
 chmod 664 "$AUDIT_LOG_FILE"
 chown root:"$SYS_USER" "$AUDIT_LOG_FILE"
 
-# Konfiguracja PROMPT_COMMAND / trap w .bashrc użytkownika do trwałego logowania poleceń
+# Rejestrowanie nieinteraktywne przez ~/.ssh/rc
+SSH_RC="$SSH_DIR/rc"
+cat <<'EOF' > "$SSH_RC"
+#!/bin/sh
+if [ -n "$SSH_ORIGINAL_COMMAND" ]; then
+  printf "[%s] [%s] [%s] %s\n" "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$USER" "${SSH_CLIENT:-local}" "$SSH_ORIGINAL_COMMAND" >> /var/log/starnet-agents/${USER}.log 2>/dev/null || true
+fi
+EOF
+chmod 755 "$SSH_RC"
+chown "$SYS_USER:$SYS_USER" "$SSH_RC"
+
+# Konfiguracja PROMPT_COMMAND / trap w .bashrc użytkownika do trwałego logowania poleceń interaktywnych
 BASHRC="$USER_HOME/.bashrc"
 if ! grep -q "starnet-audit" "$BASHRC" 2>/dev/null; then
   cat <<'EOF' >> "$BASHRC"
