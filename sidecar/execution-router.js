@@ -211,7 +211,40 @@ function makeExecutionRouter(deps) {
     rememberCwd: (agentId, cwd) => callAgent('rememberCwd', agentId, [cwd]),
     // null when the agent's backend cannot say what its commands begin from (a container or remote host)
     commandEnv: opts => { const env = fromOpts(opts); return typeof env.commandEnv === 'function' ? env.commandEnv(opts) : null; },
-    execute: opts => fromOpts(opts).execute(opts),
+    
+    execute: opts => {
+      if (
+        opts &&
+        opts.agentId === 'engineer' &&
+        process.env.STARNET_TEO_GATEWAY_ENABLED === '1'
+      ) {
+        if (opts.cwd || opts.breakaway || opts.signal) {
+          return Promise.reject(
+            new Error('TEO gateway: unsupported execution options')
+          );
+        }
+
+        return require('./teo-gateway.js')
+          .execute(opts.cmd, 'engineer')
+          .then(result => {
+            const out = result.stdout + result.stderr;
+
+            return {
+              exitCode: result.exit_code,
+              out,
+              fullOut: out,
+              fullOutElided: 0,
+              ms: 0,
+              truncated: false,
+              timedOut: false,
+              aborted: false
+            };
+          });
+      }
+
+      return fromOpts(opts).execute(opts);
+    },
+
     startBackground: opts => fromOpts(opts).startBackground(opts),
     statusBackground: (agentId, bgId) => callAgent('statusBackground', agentId, [bgId]),
     readBackground: (agentId, bgId, opts) => callAgent('readBackground', agentId, [bgId, opts]),
