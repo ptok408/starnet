@@ -73,6 +73,9 @@ function makeExecutionRouter(deps) {
       throw teoUnavailable(operation);
     };
 
+    // The host-side working directory is separate from StarNet's container paths.
+    let remoteCwd = '/home/teo';
+
     const backgroundError = () => ({
       ok: false,
       error: 'TEO gateway: background operations are not supported'
@@ -122,7 +125,19 @@ function makeExecutionRouter(deps) {
 
       getCwd: agentId => local.getCwd(agentId),
 
-      rememberCwd: () => denySync('rememberCwd'),
+      rememberCwd: (agentId, cwd) => {
+        if (String(agentId) !== 'engineer' ||
+            typeof cwd !== 'string' ||
+            !cwd.startsWith('/') ||
+            cwd.length > 4096 ||
+            /[\x00\r\n]/.test(cwd)) {
+          throw teoUnavailable('rememberCwd');
+        }
+        // The path comes from the nonce-marked shell result on Contabo.
+        // Never use it as a path inside the StarNet application container.
+        remoteCwd = cwd;
+        return { ok: true };
+      },
 
       commandEnv: () => null,
 
@@ -136,20 +151,31 @@ function makeExecutionRouter(deps) {
         }
 
         if (
-          opts.cwd ||
           opts.breakaway ||
-          opts.signal ||
           opts.input != null
         ) {
           return denied(
-            'execution options (cwd/breakaway/signal/input)'
+            'execution options (breakaway/input)'
           );
         }
 
+        // shell.exec sends a container-side cwd and an AbortSignal by default.
+        // Do not interpret either as permission to execute locally.
+        if (opts.signal && opts.signal.aborted) {
+          return denied('aborted before execution');
+        }
+        if (typeof opts.cmd !== 'string') {
+          return denied('invalid command');
+        }
+
+        // The command runs on Contabo, as the unprivileged teo user.
+        // CWD from StarNet is a CONTAINER path; use only the remote cwd.
+        const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
+        const command = 'cd -- ' + quote(remoteCwd) + ' || exit 1\n' + opts.cmd;
         const started = Date.now();
 
         return require('./teo-gateway.js')
-          .execute(opts.cmd, 'engineer')
+          .execute(command, 'engineer')
           .then(result => {
             const fullOut =
               result.stdout + result.stderr;
